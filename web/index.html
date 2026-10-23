@@ -26,12 +26,46 @@
   <div class="row mt">
     <div class="stat"><div class="k">已缓存题目</div><div class="v" id="s-cached">—</div></div>
     <div class="stat"><div class="k">非题目跳过</div><div class="v" id="s-skipped">—</div></div>
+    <div class="stat"><div class="k">空标题</div><div class="v" id="s-empty">—</div></div>
     <div class="stat"><div class="k">失败次数</div><div class="v" id="s-errors">—</div></div>
   </div>
   <div class="row mt">
     <div class="stat"><div class="k">当前模型</div><div class="v small" id="s-model">—</div></div>
     <div class="stat"><div class="k">服务端口</div><div class="v small" id="s-port">—</div></div>
     <div class="stat"><div class="k">接口令牌</div><div class="v small" id="s-token">—</div></div>
+  </div>
+  <div class="hint" id="dbinfo"></div>
+</section>
+
+<section>
+  <h2>最近请求</h2>
+  <div class="box flush">
+    <div id="recent" class="recent">
+      <div class="rempty">还没有记录</div>
+    </div>
+  </div>
+  <div class="hint">
+    每 5 秒自动刷新。刷课时这里应该持续出现记录——<br>
+    一条都没有，说明请求没到服务端（题库没启用、地址不对、或跨域被拦）；<br>
+    全是「空题」，说明 OCS 传过来的 <code>${title}</code> 是空的；<br>
+    全是「跳过」，说明抓到的不是题目，是课件正文。
+  </div>
+</section>
+
+<section>
+  <h2>缓存题目</h2>
+  <div class="box">
+    <input id="cq" placeholder="按题干或答案搜索…" autocomplete="off" spellcheck="false">
+    <div class="hint" id="chint">—</div>
+  </div>
+  <div class="box flush mt">
+    <div id="clist" class="clist">
+      <div class="rempty">还没有缓存题目</div>
+    </div>
+  </div>
+  <div class="hint">
+    这里存的是已经答过的题，同题再遇到直接命中，不再调模型、不计费。<br>
+    答案是最终发给 OCS 的那一份（清洗、对齐之后）。
   </div>
 </section>
 
@@ -41,7 +75,11 @@
     <label for="key">DeepSeek API Key</label>
     <input id="key" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false">
     <div class="hint" id="keyhint"></div>
-    <div class="mt"><button onclick="saveKey(this)">保存并测试</button></div>
+    <div class="mt btnrow">
+      <button onclick="saveKey(this)">保存并测试</button>
+      <button class="ghost" id="clearBtn" style="display:none"
+              onclick="clearKey(this)">清除已保存的 Key</button>
+    </div>
     <div class="msg" id="kmsg"></div>
     <div class="hint" style="margin-top:14px">
       <a href="javascript:adv()" id="advlink">高级选项</a>

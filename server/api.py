@@ -90,8 +90,11 @@ def status_payload():
             "api_calls": s.get("api_calls", 0),
             "cached": s.get("cached", 0),
             "skipped": s.get("skipped", 0),
+            "empty": s.get("empty", 0),
             "errors": s.get("errors", 0),
         },
+        "db": store.db_info(),
+        "recent": service.get_recent(),
         "ocs": {
             "url": f"http://127.0.0.1:{config.PORT}/query",
             "config": ocs_config_json(),
@@ -159,6 +162,21 @@ class Handler(BaseHTTPRequestHandler):
                                           p.get("type", ""), p.get("token", ""))
         self._send(code, body)
 
+    def _route_cache(self):
+        """缓存题目列表。支持 q（关键词）和 limit。
+
+        翻页没做，因为一个学期的课最多几百道题，一次 100 条够翻；
+        真需要再加 offset，store.list_answers 已经留好了参数。
+        """
+        p = self._query_params()
+        try:
+            limit = int(p.get("limit") or 100)
+        except ValueError:
+            limit = 100
+        limit = max(1, min(limit, 500))
+        total, items = store.list_answers(p.get("q", ""), limit)
+        self._send(200, {"code": 1, "total": total, "items": items})
+
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/query":
@@ -170,6 +188,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, store.get_stats())
         elif path == "/api/status":
             self._send(200, status_payload())
+        elif path == "/api/cache":
+            self._route_cache()
         else:
             self._send_static(path)
 
@@ -183,7 +203,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"code": 0, "message": "not found"})
 
     def _handle_config(self):
-        """网页上保存 Key / 令牌。"""
+        """网页上保存 / 清除配置。"""
         n = int(self.headers.get("Content-Length") or 0)
         if n <= 0 or n > 64 * 1024:
             self._send(400, {"code": 0, "message": "请求体异常"})
@@ -192,6 +212,19 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(n).decode("utf-8"))
         except Exception:
             self._send(400, {"code": 0, "message": "JSON 解析失败"})
+            return
+
+        # 清除 Key 走独立标志。
+        # 不能靠"传了空字符串"来判断：save_config 用 None 表示"这个字段不改"，
+        # 空串和"没传"在 JSON 里都是空值，靠猜意图迟早两边理解不一致。
+        if data.get("clear_key"):
+            ok, msg = config.save_config(api_key="")
+            if not ok:
+                self._send(200, {"code": 0, "message": msg})
+                return
+            # 没 Key 就不用测连通性了
+            self._send(200, {"code": 1, "message": "已清除", "cleared": True,
+                             "tested": False})
             return
 
         key = (data.get("api_key") or "").strip()

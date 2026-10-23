@@ -48,85 +48,114 @@ def similarity(a, b):
     return 2.0 * inter / (len(ba) + len(bb))
 
 
-def align_answer_to_options(answer, options):
-    """把模型答案改造成 OCS 更容易匹配上的形态。
+# 选项正文外面爱包的反引号、引号，比对前先剥掉。
+# 典型：注释符号这道题的选项写的是 "A. ``#``"，答案是 "#"，
+# 不剥的话两个字符串永远不相等。
+_WRAP = " \t\r\n\u3000`'\"“”‘’"
 
-    常见失败场景：选项是「爱因斯坦的相对论」，模型答「相对论」。
-    此时 答案⊉选项，相似度约 0.33 < 0.6，OCS 直接丢弃。
 
-    本函数按优先级尝试：
-      1. 答案已能精确匹配某选项          -> 原样返回
-      2. 答案是某选项的子串              -> 返回该选项原文（补全上下文）
-      3. 相似度已 > 0.6                  -> 原样返回
-      4. 能找到包含答案的选项且整体不太长 -> 返回选项原文
-      5. 都不行                          -> 返回选项标号（走 OCS 阶段3兜底）
-    """
-    if not answer or not options:
-        return answer
+def trim_wrap(s):
+    return (s or "").strip().strip(_WRAP)
 
-    # options 可能是 "A. 甲\nB. 乙" 这样的整串，也可能是已拆好的列表，统一成列表
-    raw_list = options if isinstance(options, (list, tuple)) else str(options).splitlines()
 
-    # 拆出选项正文与标号
-    opt_texts, opt_labels = [], []
-    seq = 0  # 无标号选项按出现顺序补 A/B/C
+def split_options(options):
+    """把 "A. 甲\nB. 乙" 拆成 ([标号], [正文])。没有标号的按顺序补 A/B/C。"""
+    labels, texts, seq = [], [], 0
+    raw_list = options if isinstance(options, (list, tuple)) else str(options or "").splitlines()
     for raw in raw_list:
         line = (raw or "").strip()
         if not line:
             continue
         m = re.match(r"^\s*([A-Za-z])\s*[.、．:：)）]\s*(.+)$", line)
         if m:
-            opt_labels.append(m.group(1).upper())
-            opt_texts.append(m.group(2).strip())
+            labels.append(m.group(1).upper())
+            texts.append(m.group(2).strip())
         else:
-            opt_labels.append(chr(ord("A") + seq))
-            opt_texts.append(line)
+            labels.append(chr(ord("A") + seq))
+            texts.append(line)
         seq += 1
+    return labels, texts
 
-    if not opt_texts:
-        return answer
 
-    ans_n = norm_for_match(answer)
+def align_one(part, options):
+    """把**一段**答案对齐到某个选项的原文，对不上返回 None。
 
-    # 1. 已能精确匹配 -> 不用动
-    for t in opt_texts:
-        if norm_for_match(t) == ans_n:
-            return answer
+    为什么改成"对不上就返回 None"：
 
-    # 2. 答案是某选项的子串 -> 返回选项原文（补全上下文，满足"答案⊇选项"）
-    subs = [(i, t) for i, t in enumerate(opt_texts) if ans_n and ans_n in norm_for_match(t)]
-    if len(subs) == 1:
-        return subs[0][1]
+    OCS 的 resolveSingle / resolveMultiple 里，匹配不上的片段不会报错，
+    只是被静默忽略；但它的相似度兜底（> 0.6）会把片段对到一个
+    **错误** 的选项上点下去。结果就是页面上点了几项、
+    答题面板的状态却对不上——用户看到的是"明明都选了，还显示未选"。
 
-    # 3. 相似度已过阈值 -> 原样返回
-    best = max((similarity(answer, t) for t in opt_texts), default=0)
+    所以这里宁可返回 None 让调用方丢掉这一段，也不交一个"差不多"的答案。
+
+    尝试顺序（和 OCS 的阶段1/阶段2 对齐）：
+      1. 原文相等（含 #、// 这类符号答案）
+      2. 归一化后相等
+      3. 答案是选项的子串，且只命中一个选项
+      4. 相似度 > 0.6
+    """
+    _, texts = split_options(options)
+    if not texts:
+        return None
+    p = trim_wrap(part)
+    if not p:
+        return None
+
+    # 1. 原文相等
+    for t in texts:
+        if trim_wrap(t) == p:
+            return t
+
+    pn = norm_for_match(p)
+    if pn:
+        # 2. 归一化相等
+        for t in texts:
+            if norm_for_match(t) == pn:
+                return t
+        # 3. 答案是选项的子串，且只命中一个（命中多个说明有歧义，交给相似度判）
+        subs = [t for t in texts if pn in norm_for_match(t)]
+        if len(subs) == 1:
+            return subs[0]
+
+    # 4. 相似度
+    best_i, best = -1, 0.0
+    for i, t in enumerate(texts):
+        s = similarity(p, t)
+        if s > best:
+            best, best_i = s, i
     if best > 0.6:
-        return answer
+        return texts[best_i]
 
-    # 4. 找包含答案的选项，且选项不算太长（避免选到一个泛泛的长选项）
-    cands = [(i, t) for i, t in enumerate(opt_texts)
-             if ans_n and ans_n in norm_for_match(t) and len(t) <= len(answer) * 4 + 12]
-    if cands:
-        # 取最短的那个，最贴近答案本身
-        cands.sort(key=lambda x: len(x[1]))
-        return cands[0][1]
+    return None
 
-    # 5. 兜底：返回标号，让 OCS 走阶段3（纯字母答案）
-    # 只有当模型答案与某选项有部分重合时才这么做，否则宁可保持原样
-    for i, t in enumerate(opt_texts):
-        tn = norm_for_match(t)
-        if ans_n and tn and (ans_n in tn or tn in ans_n):
-            return opt_labels[i]
 
-    # 6. 最后兜底：答案与所有选项字面都不沾边（模型做了同义改写/概括）。
-    # 此时任何返回都无法让 OCS 的阶段1/2 命中，但返回"字符重合度最高"的选项
-    # 至少还有机会：OCS 阶段2 用 Dice 系数，部分重合仍可能 > 0.6。
-    # 若最高相似度也极低，则保持原答案，让 OCS 自行跳过（总比乱选好）。
-    scored = [(i, similarity(answer, t)) for i, t in enumerate(opt_texts)]
-    if scored:
-        scored.sort(key=lambda x: -x[1])
-        bi, bs = scored[0]
-        if bs > 0.25:
-            return opt_texts[bi]
+def options_in_text(text, options):
+    """一段长答案里**同时包含**多个选项原文时，把这些选项按顺序挑出来。
 
-    return answer
+    用在哪：模型有时不用 # 分段，而是把几个正确选项抄成一句话。
+    OCS 拿到这种答案是靠"答案⊇选项"逐个命中的，我们这边得先把它们拆开，
+    否则整段话会被当成一段，相似度匹配只会命中其中一个。
+    """
+    tn = norm_for_match(text)
+    if not tn:
+        return []
+    _, texts = split_options(options)
+    return [t for t in texts if norm_for_match(t) and norm_for_match(t) in tn]
+
+
+def best_option(text, options):
+    """一段都对不上时的最后退路：取字符重合度最高的选项。
+
+    阈值 0.35 是折中：太低会把完全无关的选项点上去（静默答错），
+    太高又等于放弃这道题。0.35 大约相当于"至少有一小半二元组相同"。
+    """
+    _, texts = split_options(options)
+    best_i, best = -1, 0.0
+    for i, t in enumerate(texts):
+        s = similarity(text, t)
+        if s > best:
+            best, best_i = s, i
+    if best_i >= 0 and best > 0.35:
+        return texts[best_i]
+    return None

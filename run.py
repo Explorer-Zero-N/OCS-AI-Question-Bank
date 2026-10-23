@@ -8,7 +8,7 @@
 
 import sys
 
-from server import api, config
+from server import api, config, store
 
 
 def main():
@@ -29,6 +29,19 @@ def main():
         print(f"  [OK] 模型      : {config.MODEL}")
         print(f"  [OK] API 地址  : {config.BASE_URL}")
     print(f"  [OK] 端口      : {config.PORT}")
+
+    # 先把数据库路径和已有记录数打出来。
+    # 出现"统计一直是 0"时，第一步要能确认：服务用的是哪个库、里面本来有没有数据。
+    # 项目里可能存在多个 cache.db（换过目录、留了旧副本），看错库是最常见的误判来源。
+    db = store.db_info()
+    existed = db["exists"]
+    cached = store.get_stats().get("cached", 0)
+    print(f"  [OK] 数据库    : {db['path']}")
+    if existed:
+        print(f"       已有 {cached} 道题的缓存，统计沿用上次的记录")
+    else:
+        print("       本次新建空库（第一次运行会出现这种情况）")
+
     if config.TOKEN:
         print("  [OK] 接口令牌  : 已启用")
     else:

@@ -2,7 +2,6 @@
 .env
 .env.*
 !.env.example
-.env.bak
 
 # ---- 本地运行数据 ----
 cache.db
