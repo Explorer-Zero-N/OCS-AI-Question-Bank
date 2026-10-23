@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OCS 自建 AI 题库</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>OCS 自建 AI 题库</h1>
+    <div class="sub">自建题库 · 替代 OCS 默认收费题库</div>
+  </div>
+  <div class="st"><span class="dot off" id="dot"></span><span id="status">加载中…</span></div>
+</header>
+
+<section>
+  <h2>运行数据</h2>
+  <div class="row">
+    <div class="stat"><div class="k">累计查询</div><div class="v" id="s-queries">—</div></div>
+    <div class="stat"><div class="k">缓存命中</div><div class="v" id="s-hits">—</div></div>
+    <div class="stat"><div class="k">实际调用</div><div class="v" id="s-calls">—</div></div>
+  </div>
+  <div class="row mt">
+    <div class="stat"><div class="k">已缓存题目</div><div class="v" id="s-cached">—</div></div>
+    <div class="stat"><div class="k">非题目跳过</div><div class="v" id="s-skipped">—</div></div>
+    <div class="stat"><div class="k">失败次数</div><div class="v" id="s-errors">—</div></div>
+  </div>
+  <div class="row mt">
+    <div class="stat"><div class="k">当前模型</div><div class="v small" id="s-model">—</div></div>
+    <div class="stat"><div class="k">服务端口</div><div class="v small" id="s-port">—</div></div>
+    <div class="stat"><div class="k">接口令牌</div><div class="v small" id="s-token">—</div></div>
+  </div>
+</section>
+
+<section>
+  <h2>API 设置</h2>
+  <div class="box">
+    <label for="key">DeepSeek API Key</label>
+    <input id="key" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false">
+    <div class="hint" id="keyhint"></div>
+    <div class="mt"><button onclick="saveKey(this)">保存并测试</button></div>
+    <div class="msg" id="kmsg"></div>
+    <div class="hint" style="margin-top:14px">
+      <a href="javascript:adv()" id="advlink">高级选项</a>
+    </div>
+    <div id="adv" style="display:none;margin-top:12px">
+      <label for="base">API 地址</label>
+      <input id="base" spellcheck="false">
+      <div class="hint">一般无需修改。使用本地模型（Ollama/LM Studio）或第三方中转时才改。</div>
+      <label for="tk" class="mt">访问令牌（可选）</label>
+      <input id="tk" placeholder="留空表示不启用" spellcheck="false">
+      <div class="hint">设置后，OCS 题库配置里也要填同一个值。防止同局域网他人盗用额度。</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>接入 OCS</h2>
+  <div class="box">
+    <label>题库地址</label>
+    <div class="copy">
+      <code id="ocsurl">—</code>
+      <button class="ghost" onclick="cp('ocsurl', this)">复制</button>
+    </div>
+    <div id="tokenhint"></div>
+    <div class="hint">在 OCS 网课助手的设置中，把上述地址填入题库配置。</div>
+
+    <label class="mt">题库配置（JSON）</label>
+    <div class="copy">
+      <code id="cfg" style="white-space:pre;overflow-x:auto">—</code>
+      <button class="ghost" onclick="cp('cfg', this)">复制</button>
+    </div>
+    <div class="hint">
+      在 OCS 设置 → 题库配置 → 「题库配置填写/修改区」中粘贴上面这段 JSON，然后保存配置。<br>
+      必须用 <code>GM_xmlhttpRequest</code> 请求类型，否则浏览器同源策略会拦截本地请求。
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>手动测试</h2>
+  <div class="box">
+    <label for="t">题型</label>
+    <select id="t">
+      <option value="single">单选题</option>
+      <option value="multiple">多选题</option>
+      <option value="judgement">判断题</option>
+      <option value="completion">填空题</option>
+    </select>
+    <label for="q" class="mt">题目</label>
+    <textarea id="q" placeholder="例如：鸦片战争发生在哪一年？"></textarea>
+    <label for="o" class="mt">选项（每行一个，判断题和填空题可留空）</label>
+    <textarea id="o" placeholder="A. 1840年&#10;B. 1842年&#10;C. 1839年"></textarea>
+    <div class="mt"><button onclick="go(this)">提交测试</button></div>
+    <div id="out"></div>
+  </div>
+</section>
+
+<footer>答案缓存于本地 SQLite · 同题不重复计费</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

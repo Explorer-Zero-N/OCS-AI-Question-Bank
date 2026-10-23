@@ -1,2 +1,43 @@
+# ---- 密钥与本地配置（绝对不能提交）----
 .env
+.env.*
+!.env.example
+.env.bak
+
+# ---- 本地运行数据 ----
+cache.db
+cache.db-journal
+cache.db-wal
+cache.db-shm
+output/
+*.log
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+venv/
+.venv/
+env/
+build/
+dist/
+
+# ---- 工具与编辑器工作目录 ----
+# AI 助手的工作目录，里面是会话记录和临时脚本，不该进仓库
+.workbuddy/
+.claude/
+.cursor/
+.idea/
+.vscode/
+*.code-workspace
+.history/
+
+# ---- 依赖 ----
 node_modules/
+
+# ---- 系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini

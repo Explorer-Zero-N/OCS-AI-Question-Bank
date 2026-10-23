@@ -31,7 +31,7 @@ if not defined PYCMD (
 
 echo   使用 Python: %PYCMD%
 echo.
-%PYCMD% app.py
+%PYCMD% run.py
 
 rem Python 退出后停住窗口，便于查看报错信息
 echo.

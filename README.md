@@ -20,10 +20,41 @@ copy .env.example .env
 # 用记事本或 VS Code 打开 .env，填入 DEEPSEEK_API_KEY
 
 # 2. 启动
-python app.py
+python run.py
 ```
 
 或直接双击 `启动.bat`。
+
+## 项目结构
+
+前后端分离，后端只输出 JSON，页面是独立的静态文件。
+
+```
+run.py                启动入口：横幅 + 拉起 HTTP 服务
+server/               后端
+├── config.py           读/写 .env、运行时常量、prompt
+├── store.py            SQLite 答案缓存 + 统计
+├── llm.py              调模型、拼 prompt、清洗答案
+├── matching.py         归一化、Dice 相似度、答案对齐到选项
+├── detector.py         非题目识别（课件正文拦截）
+├── service.py          一次查询的业务编排
+└── api.py              路由 + 静态文件 + /api/status
+web/                  前端
+├── index.html          页面结构
+├── style.css           样式
+└── app.js              拉 /api/status 填数据、保存 Key、手动测试
+```
+
+依赖方向是单向的，只能从上往下：
+
+```
+api -> service -> llm / matching / detector / store -> config
+```
+
+`config` 最底层，谁都能用它，它不 import 任何人。这样不会出现循环导入。
+
+**改配置别写 `from .config import API_KEY`**——那是快照，网页上保存新 Key 后不生效，
+要用 `config.API_KEY` 这种属性访问。原因写在 `config.py` 的模块注释里。
 
 ## 两项关键适配（针对 OCS 的匹配与误抓）
 
@@ -150,8 +181,11 @@ http://127.0.0.1:8000/query
 浏览器打开 `http://127.0.0.1:8000/`，可以看到：
 
 - 服务状态、当前模型
-- 累计查询 / 缓存命中 / 实际调用 API / 已缓存题目 / 失败次数
+- 累计查询 / 缓存命中 / 实际调用 API / 已缓存题目 / 非题目跳过 / 失败次数
 - 一个手动测试框，可自己输题目验证答案质量
+
+页面是 `web/` 下的三个静态文件，数据由 `GET /api/status` 一次取回。
+后端不拼 HTML，所以改样式只动 `style.css`，改布局只动 `index.html`。
 
 ## 接口
 
@@ -165,11 +199,11 @@ http://127.0.0.1:8000/query
 | `token` | 访问令牌（设置了 `API_TOKEN` 时必填） |
 
 ```bash
-curl "http://127.0.0.1:8000/query?title=%E9%B8%A3%E7%82%BC%E6%98%AF%E5%93%AA%E5%B9%B4&options=A.1840%E5%B9%B4%0AB.1842%E5%B9%B4&type=single"
+curl "http://127.0.0.1:8000/query?title=%E9%B8%A6%E7%89%87%E6%88%98%E4%BA%89%E5%8F%91%E7%94%9F%E5%9C%A8%E5%93%AA%E4%B8%80%E5%B9%B4%EF%BC%9F&options=A.%201840%E5%B9%B4%0AB.%201842%E5%B9%B4&type=single"
 ```
 
 ```json
-{"code": 1, "data": {"question": "鸣炼是哪年", "answer": "1840"}, "message": "请求成功"}
+{"code": 1, "data": {"question": "鸦片战争发生在哪一年？", "answer": "1840年"}, "message": "请求成功"}
 ```
 
 `code=0` 表示未答上，OCS 会回退到其他题库，不会中断刷课。
@@ -182,6 +216,22 @@ curl "http://127.0.0.1:8000/query?title=%E9%B8%A3%E7%82%BC%E6%98%AF%E5%93%AA%E5%
 
 查询统计，JSON 格式。
 
+### `GET /api/status`
+
+控制台用的汇总：是否就绪、模型、端口、令牌状态、脱敏 Key、六个统计数，
+以及可直接粘贴到 OCS 的配置 JSON（`ocs.url` 和 `ocs.config`）。
+
+### `POST /api/config`
+
+网页上保存配置。请求体：
+
+```json
+{"api_key": "sk-...", "base_url": "https://api.deepseek.com/v1", "token": ""}
+```
+
+写回 `.env`（先备份成 `.env.bak`），立即生效不用重启，并顺手发一次真实请求测试连通性。
+返回 `{"code":1,"tested":true,"message":"已保存"}`。
+
 ## 成本
 
 按 [DeepSeek 官方定价](https://api-docs.deepseek.com/quick_start/pricing)：
@@ -193,7 +243,8 @@ curl "http://127.0.0.1:8000/query?title=%E9%B8%A3%E7%82%BC%E6%98%AF%E5%93%AA%E5%
 ## 注意事项
 
 - **建议设置 `API_TOKEN`**。服务默认监听 `0.0.0.0`，同局域网的人知道你 IP 就能盗用额度。
-- `.env` 含 API Key，不要提交到公开仓库。
+- `.env` 含 API Key，不要提交到公开仓库。`.gitignore` 已经把 `.env`、`.env.bak`、
+  `cache.db`、`__pycache__/`、`.workbuddy/` 全部排除。
 - 已内置代理绕过（`ProxyHandler({})`），本机装有代理软件也不会影响请求。
 - 端口被占用时，改 `.env` 里的 `PORT` 即可。
 
