@@ -79,34 +79,76 @@ def get_stats():
         return st
 
 
-def list_answers(keyword="", limit=100, offset=0):
-    """列出缓存题目，按最近命中时间倒序。
+# 允许的排序。做成白名单而不是把前端传来的字符串直接拼进 SQL：
+# ORDER BY 后面没法用参数占位符，只能拼字符串，不校验就是注入口子。
+_SORTS = {
+    "updated": "updated DESC",
+    "hits": "hits DESC, updated DESC",
+    "short": "LENGTH(title) ASC, updated DESC",
+}
 
-    给控制台的「缓存题目」列表用。关键词同时匹配题干和答案——
-    经常是「我记得答案里有共同富裕」这种模糊记忆，只搜题干找不到。
 
-    返回 (总条数, 当前页列表)。总条数是过滤后的总数，不是表的总数，
-    这样"共 N 道"在搜索时显示的是搜索结果数，不是全库数。
+def list_answers(keyword="", limit=100, offset=0, sort="updated", only_unused=False):
+    """列出缓存题目。
+
+    参数：
+      keyword     关键词，同时匹配题干和答案
+      sort        updated（最近更新）/ hits（命中最多）/ short（题干最短）
+      only_unused 只看命中次数为 0 的
+
+    「题干最短」不是给用户浏览用的，是排查工具：
+    排出来一串十几个字的答案，多半是模型答得太潦草或者被截断了。
+
+    返回 (过滤后条数, 当前页列表)。过滤后条数和全库条数是两回事，
+    页面上「共 N 道」显示前者，清空按钮要用后者，所以两个都返回。
     """
     kw = (keyword or "").strip()
-    where, args = "", ()
+    conds, args = [], []
     if kw:
         # LIKE 里的 % 和 _ 是通配符，用户输入里带的要转义，否则搜 "50%" 会命中一切
         esc = kw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        where = "WHERE title LIKE ? ESCAPE '\\' OR answer LIKE ? ESCAPE '\\'"
-        args = (f"%{esc}%", f"%{esc}%")
+        conds.append("(title LIKE ? ESCAPE '\\' OR answer LIKE ? ESCAPE '\\')")
+        args += [f"%{esc}%", f"%{esc}%"]
+    if only_unused:
+        # hits 是"被复用次数"。0 表示存下来之后从来没被第二道题命中过，
+        # 这类多半是课件误抓或者答案有问题，正好拿来清
+        conds.append("hits = 0")
+
+    where = ("WHERE " + " AND ".join(conds)) if conds else ""
+    order = _SORTS.get(sort, _SORTS["updated"])
 
     with _lock, _db() as c:
-        total = c.execute(f"SELECT COUNT(*) FROM answers {where}", args).fetchone()[0]
+        total = c.execute(f"SELECT COUNT(*) FROM answers {where}", tuple(args)).fetchone()[0]
+        all_total = c.execute("SELECT COUNT(*) FROM answers").fetchone()[0]
         rows = c.execute(
-            f"""SELECT title, answer, hits, updated FROM answers {where}
-                ORDER BY updated DESC LIMIT ? OFFSET ?""",
-            args + (int(limit), int(offset))
+            f"""SELECT qhash, title, answer, hits, updated FROM answers {where}
+                ORDER BY {order} LIMIT ? OFFSET ?""",
+            tuple(args) + (int(limit), int(offset))
         ).fetchall()
 
-    items = [{"title": t, "answer": a, "hits": h, "updated": u}
-             for t, a, h, u in rows]
-    return total, items
+    items = [{"qhash": h, "title": t, "answer": a, "hits": n, "updated": u}
+             for h, t, a, n, u in rows]
+    return total, all_total, items
+
+
+def delete_answer(qhash):
+    """删一条缓存，返回实际删掉的条数（0 表示这条本来就不存在）。"""
+    if not qhash:
+        return 0
+    with _lock, _db() as c:
+        n = c.execute("DELETE FROM answers WHERE qhash=?", (qhash,)).rowcount
+    return n
+
+
+def clear_answers():
+    """清空全部答案缓存，返回删掉的条数。
+
+    只动 answers 表，stats 里的累计查询、调用次数这些历史计数保留——
+    清缓存不代表之前没查过题，把计数一起抹掉会让排查失去依据。
+    """
+    with _lock, _db() as c:
+        n = c.execute("DELETE FROM answers").rowcount
+    return n
 
 
 def db_info():

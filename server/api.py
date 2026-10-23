@@ -84,6 +84,7 @@ def status_payload():
         "base_url": config.BASE_URL,
         "token_enabled": bool(config.TOKEN),
         "token": config.TOKEN,
+        "no_cache": bool(config.NO_CACHE),
         "stats": {
             "queries": s.get("queries", 0),
             "cache_hits": s.get("cache_hits", 0),
@@ -163,9 +164,9 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, body)
 
     def _route_cache(self):
-        """缓存题目列表。支持 q（关键词）和 limit。
+        """缓存题目列表。支持 q（关键词）、sort（排序）、unused（只看没命中过）、limit。
 
-        翻页没做，因为一个学期的课最多几百道题，一次 100 条够翻；
+        翻页没做，因为一个学期的课最多几百道题，一次 500 条够翻；
         真需要再加 offset，store.list_answers 已经留好了参数。
         """
         p = self._query_params()
@@ -174,8 +175,13 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             limit = 100
         limit = max(1, min(limit, 500))
-        total, items = store.list_answers(p.get("q", ""), limit)
-        self._send(200, {"code": 1, "total": total, "items": items})
+        total, all_total, items = store.list_answers(
+            p.get("q", ""), limit, 0,
+            sort=p.get("sort", "updated"),
+            only_unused=p.get("unused") in ("1", "true", "yes"),
+        )
+        self._send(200, {"code": 1, "total": total, "all_total": all_total,
+                         "items": items})
 
     def do_GET(self):
         path = urlparse(self.path).path
@@ -199,8 +205,40 @@ class Handler(BaseHTTPRequestHandler):
             self._route_query()
         elif path == "/api/config":
             self._handle_config()
+        elif path == "/api/cache/delete":
+            self._handle_cache_delete()
+        elif path == "/api/cache/clear":
+            self._handle_cache_clear()
         else:
             self._send(404, {"code": 0, "message": "not found"})
+
+    def _read_json(self):
+        """读请求体并解析 JSON。读不到就当空对象，调用方自己校验字段。"""
+        n = int(self.headers.get("Content-Length") or 0)
+        if n <= 0 or n > 64 * 1024:
+            return {}
+        try:
+            return json.loads(self.rfile.read(n).decode("utf-8"))
+        except Exception:
+            return {}
+
+    def _handle_cache_delete(self):
+        """删一条缓存，按 qhash 定位。
+
+        用 POST 不用 DELETE，和现有的 /api/config 保持同一种风格；
+        qhash 是主键，比拿题干当条件可靠——题干里可能有引号、换行。
+        """
+        h = (self._read_json().get("hash") or "").strip()
+        if not h:
+            self._send(400, {"code": 0, "message": "缺少 hash"})
+            return
+        n = store.delete_answer(h)
+        self._send(200, {"code": 1, "deleted": n})
+
+    def _handle_cache_clear(self):
+        """清空全部缓存。返回删掉的条数，前端用它回显。"""
+        n = store.clear_answers()
+        self._send(200, {"code": 1, "deleted": n})
 
     def _handle_config(self):
         """网页上保存 / 清除配置。"""
@@ -231,6 +269,10 @@ class Handler(BaseHTTPRequestHandler):
         token = (data.get("token") or "").strip()
         base_url = (data.get("base_url") or "").strip()
 
+        # no_cache 是布尔值，不能靠"空值"判断有没有传：
+        # 传 false 和没传都是假值，必须看字段在不在。
+        no_cache = bool(data["no_cache"]) if "no_cache" in data else None
+
         # 防呆：Key 有明显格式问题直接拦下
         if key and not re.fullmatch(r"[A-Za-z0-9_\-]{8,128}", key):
             self._send(200, {"code": 0, "message":
@@ -248,6 +290,7 @@ class Handler(BaseHTTPRequestHandler):
             api_key=key if key else None,
             token=token if token else None,
             base_url=base_url if base_url else None,
+            no_cache=no_cache,
         )
         if not ok:
             self._send(200, {"code": 0, "message": msg})

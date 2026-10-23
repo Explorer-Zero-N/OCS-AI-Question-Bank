@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>缓存题目 · OCS 自建 AI 题库</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>缓存题目</h1>
+    <div class="sub">答过的题存在本机，同题再遇到直接命中</div>
+  </div>
+  <a class="back" href="/">← 返回控制台</a>
+</header>
+
+<section>
+  <div class="box">
+    <div class="toolbar">
+      <input id="cq" placeholder="按题干或答案搜索…" autocomplete="off" spellcheck="false">
+      <button class="danger" id="clearBtn" onclick="clearAll(this)">清空全部</button>
+    </div>
+    <div class="filters">
+      <label class="sel">
+        <span>排序</span>
+        <select id="sort" onchange="changeSort(this)">
+          <option value="updated">最近更新</option>
+          <option value="hits">命中最多</option>
+          <option value="short">题干最短</option>
+        </select>
+      </label>
+      <label class="switch">
+        <input type="checkbox" id="unused" onchange="changeUnused(this)">
+        <span>只看从没命中过</span>
+      </label>
+    </div>
+    <div class="hint" id="chint">加载中…</div>
+  </div>
+</section>
+
+<section>
+  <div class="box flush">
+    <div id="clist" class="clist">
+      <div class="rempty">加载中…</div>
+    </div>
+  </div>
+</section>
+
+<footer>删除不可恢复，但题目可以重新答一次</footer>
+
+<script src="/cache.js"></script>
+</body>
+</html>

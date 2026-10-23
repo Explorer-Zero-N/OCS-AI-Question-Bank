@@ -39,53 +39,29 @@ function renderRecent(list) {
   }).join('');
 }
 
-/* 缓存题目列表。
-   和「最近请求」不同：那是内存里的 20 条流水，重启就没；
-   这是 SQLite 里真实存下来的题，重启还在。 */
-let CQ = '';          // 当前搜索词
-let cTimer = null;    // 输入防抖
+/* 缓存题目搬到了独立页面 /cache.html。
+   主页只留一个入口和一个开关，理由：一屏塞下统计、最近请求、缓存列表，
+   刷课的时候根本没法看；而且删除是危险操作，不该和统计混在一起。 */
 
-function fmtTime(ts) {
-  if (!ts) return '';
-  const d = new Date(ts * 1000);
-  const p = n => String(n).padStart(2, '0');
-  return (d.getMonth() + 1) + '-' + p(d.getDate()) + ' '
-    + p(d.getHours()) + ':' + p(d.getMinutes());
-}
-
-function renderCache(j) {
-  const box = document.getElementById('clist');
-  const tip = document.getElementById('chint');
-  const items = j.items || [];
-  const total = j.total || 0;
-
-  if (!items.length) {
-    box.innerHTML = '<div class="rempty">'
-      + (CQ ? '没有匹配的题目' : '还没有缓存题目') + '</div>';
-    tip.textContent = CQ ? '没有匹配「' + CQ + '」的题目' : '共 0 道';
-    return;
-  }
-
-  tip.textContent = CQ
-    ? '匹配 ' + total + ' 道'
-    : '共 ' + total + ' 道' + (total > items.length ? '，显示最近 ' + items.length + ' 道' : '');
-
-  box.innerHTML = items.map(it =>
-    '<div class="crow">'
-      + '<div class="ctitle">' + esc(it.title) + '</div>'
-      + '<div class="canswer">' + esc(it.answer) + '</div>'
-      + '<div class="cmeta">命中 ' + (it.hits || 0) + ' 次 · ' + fmtTime(it.updated) + '</div>'
-      + '</div>').join('');
-}
-
-async function loadCache() {
+async function toggleNoCache(cb) {
+  const want = cb.checked;
+  cb.disabled = true;
   try {
-    const r = await fetch('/api/cache?limit=100&q=' + encodeURIComponent(CQ),
-                          { cache: 'no-store' });
+    const r = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ no_cache: want })
+    });
     const j = await r.json();
-    if (j.code === 1) renderCache(j);
+    if (j.code !== 1) {
+      cb.checked = !want;
+      alert('设置失败：' + j.message);
+    }
   } catch (e) {
-    /* 服务刚重启的瞬间可能连不上，下一轮轮询自己会补上，不用弹错 */
+    cb.checked = !want;
+    alert('请求失败：' + e);
+  } finally {
+    cb.disabled = false;
   }
 }
 
@@ -117,8 +93,8 @@ async function loadStatus(full) {
 
     renderRecent(j.recent);
 
-    // 正在搜索框里打字时不要刷新列表，否则滚动位置和光标都会被打断
-    if (document.activeElement !== document.getElementById('cq')) loadCache();
+    // 缓存入口上的数字，刷课的时候能看出在不在往库里存
+    setText('cn', j.stats.cached);
 
     if (!full && filled) return;   // 轮询时到此为止，不动输入框
 
@@ -128,6 +104,7 @@ async function loadStatus(full) {
     // 用户不动它直接点保存，提交上去的是 "sk-abc***3456" 这种脱敏串。
     document.getElementById('key').placeholder = j.has_key ? j.masked_key : 'sk-...';
     document.getElementById('clearBtn').style.display = j.has_key ? '' : 'none';
+    document.getElementById('nocache').checked = !!j.no_cache;
     document.getElementById('keyhint').innerHTML = j.has_key
       ? '当前已配置 <code>' + esc(j.masked_key) + '</code>，输入框留空表示保持不变。'
       : '还没有 Key。去 <a href="https://platform.deepseek.com" target="_blank">'
@@ -272,12 +249,6 @@ async function go(btn) {
     btn.disabled = false;
   }
 }
-
-document.getElementById('cq').addEventListener('input', e => {
-  CQ = e.target.value.trim();
-  clearTimeout(cTimer);
-  cTimer = setTimeout(loadCache, 250);   // 每敲一个字就查库没必要
-});
 
 loadStatus(true);
 setInterval(() => loadStatus(false), 5000);

@@ -105,8 +105,14 @@ BASE_URL = cfg("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1").rstrip("/")
 PORT = int(cfg("PORT", "8000") or 8000)
 TOKEN = cfg("API_TOKEN")
 
+# 关掉缓存：既不读也不写，每道题都重新问模型。
+#
+# 为什么"只停写"不够：库里已有的答案照样会命中，用户开了开关却发现
+# 还是拿到旧答案。要真的每次都重新搜，读和写都得跳过。
+NO_CACHE = cfg("NO_CACHE", "").strip().lower() in ("1", "true", "yes", "on")
 
-def save_config(api_key=None, token=None, base_url=None):
+
+def save_config(api_key=None, token=None, base_url=None, no_cache=None):
     """把配置写回 .env，保持其它行不变。
 
     只负责落盘 + 更新全局变量，不负责测试连通性。
@@ -114,7 +120,7 @@ def save_config(api_key=None, token=None, base_url=None):
 
     返回 (成功与否, 消息)。
     """
-    global API_KEY, TOKEN, BASE_URL
+    global API_KEY, TOKEN, BASE_URL, NO_CACHE
 
     lines = []
     if ENV_FILE.exists():
@@ -135,6 +141,8 @@ def save_config(api_key=None, token=None, base_url=None):
         _set("API_TOKEN", token)
     if base_url is not None:
         _set("DEEPSEEK_BASE_URL", base_url)
+    if no_cache is not None:
+        _set("NO_CACHE", "true" if no_cache else "false")
 
     try:
         # 不做 .env.bak 备份。
@@ -152,5 +160,7 @@ def save_config(api_key=None, token=None, base_url=None):
         TOKEN = token
     if base_url is not None:
         BASE_URL = base_url.rstrip("/")
+    if no_cache is not None:
+        NO_CACHE = bool(no_cache)
 
     return True, "已保存"

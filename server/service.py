@@ -84,11 +84,14 @@ def _handle(title, options, qtype_raw, token):
     h = store.qhash_of(title, options, qtype)
 
     # 1. 缓存
-    hit = store.cache_get(h)
-    if hit:
-        store.bump("cache_hits")
-        return (200, {"code": 1, "data": {"question": title, "answer": hit},
-                      "message": "缓存命中"}, "cached", qtype)
+    #    关掉缓存时连读都不读：已有的旧答案如果还命中，用户开了开关
+    #    却发现拿到的还是老结果，等于开关没生效。
+    if not config.NO_CACHE:
+        hit = store.cache_get(h)
+        if hit:
+            store.bump("cache_hits")
+            return (200, {"code": 1, "data": {"question": title, "answer": hit},
+                          "message": "缓存命中"}, "cached", qtype)
 
     # 2. 大模型
     try:
@@ -103,7 +106,8 @@ def _handle(title, options, qtype_raw, token):
         return (200, {"code": 0, "data": None, "message": "模型未返回有效答案"},
                 "error", qtype)
 
-    store.cache_put(h, title, answer)
+    if not config.NO_CACHE:
+        store.cache_put(h, title, answer)
     store.bump("api_calls")
     return (200, {"code": 1, "data": {"question": title, "answer": answer},
                   "message": "请求成功"}, "ok", qtype)
