@@ -35,7 +35,7 @@ def _post_chat(payload, timeout=90):
         return json.loads(resp.read().decode("utf-8"))
 
 
-def build_prompt(title, options, qtype, long_mode=False):
+def build_prompt(title, options, qtype, long_mode=False, blanks=0):
     tname = "简答题" if long_mode else config.TYPES.get(qtype, "未知题型")
     parts = [f"【题型】{tname}", f"【题目】{title.strip()}"]
     if options and options.strip():
@@ -43,6 +43,12 @@ def build_prompt(title, options, qtype, long_mode=False):
         parts.append(options.strip())
     elif long_mode:
         parts.append("【提醒】这道题有多个要点，逐条答完；不要出现 # ; | 这三个符号。")
+    elif qtype == "completion" and blanks >= 2:
+        # 空位数必须写进 prompt。
+        # 只写"多个空用 # 连接"不够——模型不知道有几个空，
+        # 就会把两个答案连成一句 "and or"，接收方切不开，一个空都填不上。
+        parts.append(f"【注意】这道题有 {blanks} 个空。按空位先后输出 {blanks} 个答案，"
+                     f"用 # 连接，顺序不能乱；不要写序号，不要解释。")
     parts.append("【你的答案】")
     return "\n".join(parts)
 
@@ -51,7 +57,7 @@ def build_prompt(title, options, qtype, long_mode=False):
 _MD_LIST_RE = re.compile(r"(?m)^\s*(?:[-*•·]|\d+\s*[.、)）]|[（(]\d+[）)])\s*")
 
 
-def clean(raw, qtype, long_mode=False):
+def clean(raw, qtype, long_mode=False, blanks=0):
     """清理模型输出，去掉常见废话。
 
     两种处理方式，差别很大：
@@ -61,6 +67,8 @@ def clean(raw, qtype, long_mode=False):
                只有第一行活下来——这是"简答答得太简单"最直接的元凶。
 
       选择/填空 答案本来就该是一小段，取首行、去标点、把分隔符统一成 #。
+               只有多空填空例外：模型常常一个空写一行，取首行会把
+               后面几个空整段丢掉，所以改把换行折成 #。
     """
     ans = (raw or "").strip()
     ans = re.sub(r"^[`*\"'\s]+|[`*\"'\s]+$", "", ans)          # 去 markdown/引号
@@ -101,6 +109,12 @@ def clean(raw, qtype, long_mode=False):
 
     # 填空：一行就够，多了说明模型在解释
     ans = _MD_LIST_RE.sub("", ans)
+    if blanks >= 2:
+        # 多空填空：一个空写一行是模型的常见习惯（"and\nor"）。
+        # 原来这里无条件取首行，第二个空直接被丢掉，
+        # 交出去只剩一段，接收方按空位数一比就判不通过。
+        ans = re.sub(r"\s*[\r\n]+\s*", "#", ans).strip("#").strip()
+        return ans[:500]
     ans = ans.splitlines()[0].strip() if ans else ans
     return ans[:500]
 
@@ -316,6 +330,71 @@ def count_blanks(title):
     return len(_BLANK_RE.findall(title or ""))
 
 
+# 填空的另一种空位写法：「（  ）」。
+# 只对填空题生效——选择题题干里的括号太常见（「……包括（）」），
+# 拿它数空位会把单选题误判成多空题。
+_PAREN_BLANK_RE = re.compile(r"[（(]\s*[）)]")
+
+
+def blank_count(title, qtype):
+    """这道题要填几个空。
+
+    先数下划线；一个都没有、题型又是填空时，再数全角括号。
+    只用 count_blanks 会漏掉「（ ）」写法的空位，把两空题当成单空题，
+    结果只填第一个空、第二个空空着。
+    """
+    n = count_blanks(title)
+    if n == 0 and qtype == "completion":
+        n = len(_PAREN_BLANK_RE.findall(title or ""))
+    return n
+
+
+# 多空答案的切分顺序，从最该用的开始试。
+# 只有前两种是接收方（OCS）认的分隔符，后两种纯粹是"模型可能这么写"的兜底：
+# 分割符只有 ['===','#','---','###','|',';','；']，顿号、逗号、空格都不算。
+_PART_SPLITTERS = (
+    r"[#|;；]",            # 照 prompt 写的标准格式
+    r"\s*[\r\n]+\s*",      # 一个空写一行
+    r"\s*[、,，/／]\s*",    # 顿号、逗号、斜杠
+    r"\s+",                # 英文答案 "and or" 只剩空格可用
+)
+
+# 段首序号：1. / 1、/ (1) / ① / a.
+_LABEL_RE = re.compile(
+    r"^\s*(?:[（(]\d+[）)]|\d+\s*[.、．)）]|[①-⑳]|[A-Za-z]\s*[.、．)）])\s*")
+
+
+def _fit_blanks(ans, n):
+    """把多空填空的答案切成正好 n 段，用 # 连接。
+
+    为什么必须"正好"：接收方拿答案先按分隔符切段，再和页面上输入框的个数比。
+    段数不等于输入框个数就直接判不通过，**一个空都不填**——
+    不是"填不满"，是完全不动，页面上看起来就是没有反应。
+
+    所以「切不齐」和「没答」是一回事。模型不听话时答案常长成
+    `and or` / `and、or` / `and\\nor`，这里按常见写法逐个试，切出正好 n 段就交。
+
+    都切不出来就原样返回。宁可让接收方跳过这道题，也不硬凑一个段数出来
+    ——凑出来的第二段一定是错的，填进去比空着更糟。
+    """
+    ans = (ans or "").strip()
+    if n < 2 or not ans:
+        return ans
+
+    longer = None
+    for pat in _PART_SPLITTERS:
+        parts = [_LABEL_RE.sub("", p).strip() for p in re.split(pat, ans)]
+        parts = [p for p in parts if p]
+        if len(parts) == n:
+            return "#".join(parts)
+        if longer is None and len(parts) > n:
+            # 切多了：模型在答案后面补了一句解释。取前 n 段。
+            longer = parts
+    if longer:
+        return "#".join(longer[:n])
+    return ans
+
+
 def join_as_text(ans):
     """把 # 分段连成一段文字，供简答/单空填空使用。
 
@@ -366,16 +445,21 @@ def should_split(title, qtype, ans):
     填到第二段就找不到了，于是这道题卡住不动，
     后面排队的题目全部显示「等待顺序答题中」，看起来像没答上。
 
-    规则：
+    规则（**先看题面，不看答案**）：
       多选            -> 必须分段，这是 OCS 要求的格式
-      填空且 ≥2 个空  -> 分段
+      填空且 ≥2 个空  -> 分段，且段数必须等于空位数
       其余（简答等）  -> 连成一段
+
+    原来第一句是 `if "#" not in ans: return False`，先看答案有没有 #。
+    多空填空的答案如果本来就没带 #（"and or"），就会一路返回 False，
+    最后被 join_as_text 当成一段交出去——题面明明两个空却只给一段，
+    接收方段数对不上，一个空都填不上。
     """
-    if "#" not in (ans or ""):
-        return False
     if qtype == "multiple":
         return True
-    return count_blanks(title) >= 2
+    if qtype == "completion" and blank_count(title, qtype) >= 2:
+        return True
+    return False
 
 
 def ask(title, options, qtype):
@@ -383,23 +467,32 @@ def ask(title, options, qtype):
     if not config.API_KEY:
         raise RuntimeError("未配置 DEEPSEEK_API_KEY，请编辑 .env 文件")
 
+    # 空位数先算出来，prompt、清洗、分段三处都要用。
+    blanks = blank_count(title, qtype)
+
     # 简答题走另一套 prompt 和更长的输出上限。
     # 原来不分题型，简答也被"只输出答案本身、不要任何解释"约束，
     # 结果就是几个关键词，题目里"及其相互关系"这类要求全被吞掉。
     long_mode = is_short_answer(title, qtype)
+    if blanks >= 2:
+        # 多空填空必须走 # 分隔协议，不能被判成简答。
+        # 括号写法的空位（「（ ）」）不在 is_short_answer 的排除条件里，
+        # 不在这里拦一下，就会走简答分支把 # 换成全角 ＃，段数全废。
+        long_mode = False
 
     r = _post_chat({
         "model": config.MODEL,
         "messages": [
             {"role": "system",
              "content": config.SYSTEM_PROMPT_LONG if long_mode else config.SYSTEM_PROMPT},
-            {"role": "user", "content": build_prompt(title, options, qtype, long_mode)},
+            {"role": "user",
+             "content": build_prompt(title, options, qtype, long_mode, blanks)},
         ],
         "temperature": 0.1,
         "max_tokens": 800 if long_mode else 512,
     })
     content = r["choices"][0]["message"].get("content") or ""
-    ans = clean(content, qtype, long_mode)
+    ans = clean(content, qtype, long_mode, blanks)
 
     if long_mode:
         # 简答不参与任何 # 协议：它是往一个 textarea 里填一段话
@@ -417,6 +510,10 @@ def ask(title, options, qtype):
     # 才产生重复，对齐之前还看不出来。
     if qtype == "multiple":
         ans = dedupe_parts(ans)
+
+    # 多空填空：段数必须正好等于空位数，差一段就等于没答。
+    if qtype == "completion" and blanks >= 2:
+        return _fit_blanks(ans, blanks)
 
     # 最后一步：不是多选题、题面也没有多个空位的，把 # 分段连成一段。
     # 典型就是单空填空——分段只会让 OCS 卡在顺序填写里。

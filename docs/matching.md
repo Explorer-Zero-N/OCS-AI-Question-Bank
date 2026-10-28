@@ -119,11 +119,66 @@ OCS 见到 `#` 就当「多个空」，进入顺序填写模式，挨个找输�
 | 题型 / 题面 | 答案格式 |
 |---|---|
 | 多选 | `#` 分段（OCS 的硬要求） |
-| 填空且题面有 ≥2 个 `____` | `#` 分段 |
+| 填空题且题面 ≥2 个空位 | `#` 分段，**且段数必须等于空位数** |
 | 其余（简答、单空填空） | 顿号或逗号连成一段 |
 
-注意**只用下划线数空位，不用括号**——括号在多选题题干里太常见
+注意**空位数只在下划线里数**（填空题另算括号，见下）——括号在多选题题干里太常见
 （「……包括（）」），拿它当空位会把多选题误判成填空。
+
+### 多空填空：段数必须正好等于空位数
+
+这是踩得最狠的一处。OCS 的 `resolveCompletion`（`resolvers/completion.ts`）：
+
+```ts
+if (ans.length !== 0 && (ans.length === blankCount || blankCount === 1)) {
+	if (ans.length === blankCount) return { finish: true, answers: ans };
+	else if (blankCount === 1) return { finish: true, answers: [ans.join(' ')] };
+}
+return { finish: false };
+```
+
+`blankCount` 是页面上输入框的个数（`options.length`），`ans` 是答案经 `splitAnswer`
+切出来的段数。**段数不等于输入框个数，直接 `finish: false`——一个空都不填**。
+不是「填不满」，是完全不动，页面上看着像没反应。
+
+所以两个空的题交一整串 `and or`，等于没答。而 `splitAnswer` 只认
+`['===', '#', '---', '###', '|', ';', '；']`，顿号、逗号、空格**都不是**分隔符。
+
+改之前有四层叠加在这个结果上：
+
+| 位置 | 原来的行为 | 后果 |
+|---|---|---|
+| `build_prompt()` | 只说「多个空用 # 连接」，没给空位数 | 模型不知道有几个空，把两个答案连成一句 |
+| `clean()` 填空分支 | 无条件 `splitlines()[0]` | 模型分行写 `and\nor`，第二个空被整段丢掉 |
+| `should_split()` | 第一句就是 `if "#" not in ans: return False` | 题面明明 2 个空，也判成「不用分段」 |
+| `join_as_text()` | 没有 `#` 就原样返回 | 最终交出一整串，段数 1 |
+
+现在三处一起补：
+
+1. `blank_count(title, qtype)`：先数 `____`；一个都没有、题型又是填空时，再数 `（ ）`。
+   括号只在填空题里算数，选择题不受影响。
+2. `build_prompt()` 把空位数写进 prompt：「这道题有 2 个空……用 # 连接，不要写序号」。
+3. `_fit_blanks(ans, n)` 兜底：依次用 `#|;；` → 换行 → `、,，/` → 空格切，
+   取第一个能切出**正好 n 段**的结果；切多了取前 n 段；都切不出来就原样返回。
+   段首的 `1.`、`(1)`、`①`、`A.` 会先剥掉。
+
+「空格」排在最后：`and or` 只能靠它分开，但含空格的中文长短语被误切的风险也最大，
+能不用就不用。
+
+`should_split()` 的判断顺序同时反过来——**先看题面有几个空，再看答案**：
+
+```python
+def should_split(title, qtype, ans):
+    if qtype == "multiple":
+        return True
+    if qtype == "completion" and blank_count(title, qtype) >= 2:
+        return True
+    return False
+```
+
+顺带一个安全边界，决定了这个方向可以放心偏：页面上只有 1 个输入框时，
+OCS 有 `blankCount === 1` 分支，会把多段用空格拼起来。所以**多分段不会伤到单空题**；
+反过来，单段喂给多空题必然全失败。永远往「按题面空位数分段」偏。
 
 另外 `detector.py` 对 `completion` 的格式检查也放宽了：原来要求题面必须以
 `___`/`。`/`？` 收尾，「简述新民主主义革命的三大法宝及其相互关系」这种
